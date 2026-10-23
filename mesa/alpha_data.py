@@ -10,8 +10,17 @@ def completar_ficha(ticker, ficha, api_key):
                             timeout=20)
         resp.raise_for_status()
         datos = resp.json()
-        if any(x in datos for x in ("Note", "Information", "Error Message")):
-            raise RuntimeError("Alpha Vantage no entregó datos, posible cuota o acceso")
+        aviso = " ".join(str(datos.get(k, "")) for k in ("Note", "Information", "Error Message")).lower()
+        if aviso:
+            if any(k in aviso for k in ("limit", "frequency", "calls per", "requests per", "rate")):
+                motivo = "límite de consultas alcanzado"
+            elif any(k in aviso for k in ("premium", "subscription", "paid", "subscribe")):
+                motivo = "endpoint restringido por el plan"
+            elif any(k in aviso for k in ("invalid", "apikey", "api key")):
+                motivo = "clave posiblemente inválida o no autorizada"
+            else:
+                motivo = "respuesta informativa o error del proveedor"
+            raise RuntimeError(f"Alpha Vantage {nombre}: {motivo}. Revisa cuota y permisos.")
         return datos
 
     def poner(campo, dato):
