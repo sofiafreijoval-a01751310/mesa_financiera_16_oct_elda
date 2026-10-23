@@ -105,15 +105,9 @@ def agente_recolector(ticker):
         if not herramientas:
             raise RuntimeError("No hay consultas MCP confirmadas")
         ficha["ticker"] = ticker
-        if a_numero(ficha.get("precio")) is None or a_numero(ficha.get("beta")) is None:
-            from .alpha_data import completar_ficha
-            ficha = completar_ficha(ticker, ficha, config.ALPHAVANTAGE_API_KEY)
-            fuente = "Alpha Vantage vía MCP + API REST"
-        else:
-            fuente = "Alpha Vantage vía MCP"
-        if a_numero(ficha.get("precio")) is None:
-            raise RuntimeError("Alpha Vantage no devolvió un precio válido; no publicar análisis vacío")
-        ficha["fuente"] = fuente
+        ficha["fuente"] = "Alpha Vantage vía MCP"
+        # MCP puede devolver campos no disponibles; no consultar REST ni inventar cifras.
+        # El resultado debe conservar None y aclararlo al estudiante.
         return ficha, herramientas
     except Exception as error:
         raise RuntimeError(f"Iris no pudo consultar datos reales ({type(error).__name__})") from error
