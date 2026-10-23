@@ -74,7 +74,7 @@ PROMPT_RECOLECTOR = """Eres Iris, la Recolectora (Agente 1) de una mesa financie
 Tu personalidad: curiosa y meticulosa; jamás inventas un dato.
 Tarea: obtener datos REALES de la acción indicada con las herramientas de Alpha Vantage.
 Reglas:
-- Haz como máximo 2 consultas: cotización actual y datos generales de la empresa.
+- Consulta GLOBAL_QUOTE y OVERVIEW para cotización e indicadores; verifica que existan cifras reales.
 - NUNCA inventes cifras. Si un dato no está disponible, escribe null.
 - Responde SOLO con un JSON con estas claves exactas:
   ticker, nombre, sector, precio, cambio_pct, fecha_dato, pe_ratio, beta,
@@ -105,7 +105,15 @@ def agente_recolector(ticker):
         if not herramientas:
             raise RuntimeError("No hay consultas MCP confirmadas")
         ficha["ticker"] = ticker
-        ficha["fuente"] = "Alpha Vantage vía MCP"
+        if a_numero(ficha.get("precio")) is None or a_numero(ficha.get("beta")) is None:
+            from .alpha_data import completar_ficha
+            ficha = completar_ficha(ticker, ficha, config.ALPHAVANTAGE_API_KEY)
+            fuente = "Alpha Vantage vía MCP + API REST"
+        else:
+            fuente = "Alpha Vantage vía MCP"
+        if a_numero(ficha.get("precio")) is None:
+            raise RuntimeError("Alpha Vantage no devolvió un precio válido; no publicar análisis vacío")
+        ficha["fuente"] = fuente
         return ficha, herramientas
     except Exception as error:
         raise RuntimeError(f"Iris no pudo consultar datos reales ({type(error).__name__})") from error
@@ -178,6 +186,8 @@ def agente_analista(ficha):
 # ----------------------------------------------------------------------
 PROMPT_COMUNICADOR = f"""Eres Vera, la Comunicadora (Agente 3). Con el análisis de Euler, redacta una nota para Telegram.
 Tu personalidad: profesora paciente y creativa para un estudiante de 12 años.
+- NO escribas DEMO salvo que la fuente incluya literalmente DATOS DEMO.
+- Nunca interpretes valores ausentes como si fueran valores reales.
 - Explica beta y P/E con analogías sencillas, sin inventar cifras ni prometer rendimientos.
 - Máximo 900 caracteres, español claro, 3 a 5 emojis como máximo.
 - Estructura: título con ticker · cifras clave · semáforo de riesgo · interpretación · pregunta para investigar.
@@ -201,6 +211,9 @@ def agente_comunicador(analisis):
     if config.MODO_SIMULACION:
         return nota_simulada(analisis)
     texto, _ = llamar_openai(PROMPT_COMUNICADOR, json.dumps(analisis, ensure_ascii=False), max_tokens=600)
+    if not config.MODO_SIMULACION and "DATOS DEMO" not in str(analisis["ficha"].get("fuente", "")):
+        import re
+        texto = re.sub(r"\bDEMO\b", "", texto, flags=re.IGNORECASE).strip()
     if DESCARGO not in texto:                      # garantía aunque el modelo lo olvide
         texto += f"\n\n{DESCARGO}"
     return f"{FIRMA_VERA}\n{texto}"
