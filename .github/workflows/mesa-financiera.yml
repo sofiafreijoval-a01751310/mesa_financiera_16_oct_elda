@@ -1,12 +1,12 @@
 # Mesa Financiera en la nube: funciona con tu computadora apagada.
-#  · Cada 10 minutos revisa si escribiste /analiza TICKER en Telegram y responde.
+#  · Cada 5 minutos revisa si escribiste /analiza TICKER en Telegram y responde.
 #  · También puedes lanzarlo a mano (incluso desde la app de GitHub en tu celular):
 #    Actions → mesa-financiera → Run workflow → escribe el ticker.
 name: mesa-financiera
 
 on:
   schedule:
-    - cron: "*/10 * * * *"          # hora UTC; GitHub puede retrasar unos minutos las ejecuciones
+    - cron: "*/5 * * * *"          # hora UTC; GitHub puede retrasar unos minutos las ejecuciones
   workflow_dispatch:
     inputs:
       ticker:
@@ -32,8 +32,9 @@ jobs:
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+      MODELO: gpt-4.1-mini
       MODO_SIMULACION: ${{ inputs.simulacion && '1' || '0' }}
       TICKER: ${{ inputs.ticker }}  # se pasa como variable, nunca se pega dentro del comando
     steps:
