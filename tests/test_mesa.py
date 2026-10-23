@@ -65,16 +65,17 @@ def test_mcp_caido_usa_respaldo_demo(monkeypatch):
 
     def falla(*args, **kwargs):
         raise ConnectionError("sin red")
-    monkeypatch.setattr(agentes, "llamar_claude", falla)
-    ficha, herramientas = agentes.agente_recolector("AAPL")
-    assert "DEMO" in ficha["fuente"] and herramientas == []
+    monkeypatch.setattr(agentes, "llamar_openai", falla)
+    monkeypatch.setattr(config, "verificar_llaves_reales", lambda: None)
+    with pytest.raises(RuntimeError, match="no pudo consultar datos reales"):
+        agentes.agente_recolector("AAPL")
 
 
 def test_agentes_reales_encadenan_con_claude_simulado(monkeypatch):
     """Imita las respuestas de Claude para revisar el camino 'real' sin gastar llaves."""
     monkeypatch.setattr(config, "MODO_SIMULACION", False)
 
-    def claude_falso(system, mensaje, usar_mcp=False, max_tokens=900):
+    def openai_falso(system, mensaje, usar_mcp=False, max_tokens=900):
         if usar_mcp:
             return ('{"nombre":"IBM","sector":"Tech","precio":"250.5","cambio_pct":"-0.8%",'
                     '"pe_ratio":"40.1","beta":"0.7","max_52s":"300","min_52s":"200"}', ["GLOBAL_QUOTE"])
@@ -85,7 +86,8 @@ def test_agentes_reales_encadenan_con_claude_simulado(monkeypatch):
         assert '"lectura_precio": "a"' in mensaje                           # recibió la entrega 2
         return "IBM: nota sin descargo", []
 
-    monkeypatch.setattr(agentes, "llamar_claude", claude_falso)
+    monkeypatch.setattr(config, "verificar_llaves_reales", lambda: None)
+    monkeypatch.setattr(agentes, "llamar_openai", openai_falso)
     r = pl.pipeline("IBM", avisar=lambda t: None)
     assert r["herramientas_mcp"] == ["GLOBAL_QUOTE"]
     assert r["entrega_1_ficha"]["fuente"] == "Alpha Vantage vía MCP"

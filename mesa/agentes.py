@@ -1,7 +1,7 @@
 """Los tres agentes de la Mesa Financiera.
 
   Iris  · La Recolectora  (Agente 1) → consulta Alpha Vantage por MCP y entrega una FICHA (JSON)
-  Euler · El Analista     (Agente 2) → recibe la ficha, Python calcula y Claude interpreta → ANÁLISIS (JSON)
+  Euler · El Analista     (Agente 2) → recibe la ficha, Python calcula y OpenAI interpreta → ANÁLISIS (JSON)
   Vera  · La Comunicadora (Agente 3) → recibe el análisis y redacta la NOTA final para Telegram
   (Batuta, el orquestador que los dirige, vive en mesa/pipeline.py)
 
@@ -15,39 +15,39 @@ DESCARGO = "Nota educativa, no es recomendación de inversión."
 FIRMA_VERA = "✍️ Vera · Comunicadora"
 
 # ----------------------------------------------------------------------
-# Conexión con Claude (solo se usa fuera del modo simulación)
+# Conexión OpenAI Responses API. Iris usa MCP de Alpha Vantage.
 # ----------------------------------------------------------------------
 _cliente = None
 
-
-def _cliente_claude():
+def _cliente_openai():
     global _cliente
     if _cliente is None:
-        import anthropic
-        _cliente = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        from openai import OpenAI
+        _cliente = OpenAI(api_key=config.OPENAI_API_KEY, timeout=60, max_retries=1)
     return _cliente
 
-
-def llamar_claude(system, mensaje, usar_mcp=False, max_tokens=900):
-    """Envía un mensaje a Claude. Devuelve (texto, herramientas_MCP_usadas)."""
-    base = dict(model=config.MODELO, max_tokens=max_tokens, system=system,
-                messages=[{"role": "user", "content": mensaje}])
-    cliente = _cliente_claude()
+def llamar_openai(system, mensaje, usar_mcp=False, max_tokens=900):
+    if not config.OPENAI_API_KEY:
+        raise RuntimeError("Falta OPENAI_API_KEY")
+    parametros = dict(model=config.MODELO, instructions=system,
+                      input=[{"role": "user", "content": mensaje}],
+                      max_output_tokens=max_tokens, store=False)
     if usar_mcp:
-        respuesta = cliente.beta.messages.create(
-            **base,
-            mcp_servers=[{
-                "type": "url",
-                "url": f"https://mcp.alphavantage.co/mcp?apikey={config.ALPHAVANTAGE_API_KEY}",
-                "name": "alphavantage",
-            }],
-            tools=[{"type": "mcp_toolset", "mcp_server_name": "alphavantage"}],
-            betas=["mcp-client-2025-11-20"],
-        )
-    else:
-        respuesta = cliente.messages.create(**base)
-    texto = "".join(b.text for b in respuesta.content if b.type == "text").strip()
-    herramientas = [b.name for b in respuesta.content if b.type == "mcp_tool_use"]
+        if not config.ALPHAVANTAGE_API_KEY:
+            raise RuntimeError("Falta ALPHAVANTAGE_API_KEY")
+        parametros["tools"] = [{"type":"mcp", "server_label":"alphavantage",
+              "server_url":"https://mcp.alphavantage.co/mcp?apikey=" + config.ALPHAVANTAGE_API_KEY,
+              "require_approval":"never"}]
+    respuesta = _cliente_openai().responses.create(**parametros)
+    herramientas = []
+    for bloque in respuesta.output:
+        if getattr(bloque, "type", "") == "mcp_call":
+            if getattr(bloque, "error", None):
+                raise RuntimeError("Falló la consulta MCP a Alpha Vantage")
+            herramientas.append(getattr(bloque, "name", "mcp_call"))
+    texto = (respuesta.output_text or "").strip()
+    if not texto:
+        raise RuntimeError("OpenAI no devolvió texto")
     return texto, herramientas
 
 
@@ -98,14 +98,17 @@ def agente_recolector(ticker):
     """Devuelve (ficha, herramientas_usadas)."""
     if config.MODO_SIMULACION:
         return ficha_demo(ticker, "modo simulación"), []
+    config.verificar_llaves_reales()
     try:
-        texto, herramientas = llamar_claude(PROMPT_RECOLECTOR, f"Acción: {ticker}", usar_mcp=True)
+        texto, herramientas = llamar_openai(PROMPT_RECOLECTOR, f"Acción: {ticker}", usar_mcp=True)
         ficha = extraer_json(texto)
+        if not herramientas:
+            raise RuntimeError("No hay consultas MCP confirmadas")
         ficha["ticker"] = ticker
         ficha["fuente"] = "Alpha Vantage vía MCP"
         return ficha, herramientas
-    except Exception as error:                     # MCP caído, cuota agotada o JSON inválido
-        return ficha_demo(ticker, f"MCP no disponible: {type(error).__name__}"), []
+    except Exception as error:
+        raise RuntimeError(f"Iris no pudo consultar datos reales ({type(error).__name__})") from error
 
 
 # ----------------------------------------------------------------------
@@ -162,7 +165,7 @@ def agente_analista(ficha):
         lectura = lectura_simulada(indicadores)
     else:
         entrada = json.dumps({"ficha": ficha, "indicadores": indicadores}, ensure_ascii=False)
-        texto, _ = llamar_claude(PROMPT_ANALISTA, entrada)
+        texto, _ = llamar_openai(PROMPT_ANALISTA, entrada)
         try:
             lectura = extraer_json(texto)
         except ValueError:
@@ -174,7 +177,8 @@ def agente_analista(ficha):
 # VERA · La Comunicadora (Agente 3)
 # ----------------------------------------------------------------------
 PROMPT_COMUNICADOR = f"""Eres Vera, la Comunicadora (Agente 3). Con el análisis de Euler, redacta una nota para Telegram.
-Tu personalidad: clara, breve y honesta sobre los límites del análisis.
+Tu personalidad: profesora paciente y creativa para un estudiante de 12 años.
+- Explica beta y P/E con analogías sencillas, sin inventar cifras ni prometer rendimientos.
 - Máximo 900 caracteres, español claro, 3 a 5 emojis como máximo.
 - Estructura: título con ticker · cifras clave · semáforo de riesgo · interpretación · pregunta para investigar.
 - Usa solo las cifras recibidas; si la fuente dice DEMO, adviértelo en la primera línea.
@@ -196,7 +200,7 @@ def nota_simulada(analisis):
 def agente_comunicador(analisis):
     if config.MODO_SIMULACION:
         return nota_simulada(analisis)
-    texto, _ = llamar_claude(PROMPT_COMUNICADOR, json.dumps(analisis, ensure_ascii=False), max_tokens=600)
+    texto, _ = llamar_openai(PROMPT_COMUNICADOR, json.dumps(analisis, ensure_ascii=False), max_tokens=600)
     if DESCARGO not in texto:                      # garantía aunque el modelo lo olvide
         texto += f"\n\n{DESCARGO}"
     return f"{FIRMA_VERA}\n{texto}"
